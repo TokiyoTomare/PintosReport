@@ -1,3 +1,30 @@
+/*
+1. 선점형 우선순위 스케줄링: 
+우선순위가 높은 스레드가 항상 먼저 실행되도록 ready_list와 세마포어/뮤텍스 등의
+동기화 대기열을 우선순위 순으로 유지한다. 실행 중 스레드가 thread_set_priority()로
+우선순위를 낮추면 즉시 더 높은 우선순위 스레드가 Preempt 해야 하며, 대기 중이던
+높은 우선순위 스레드가 생성되거나 Unblock 될 때에도 즉시 Context Switch가 일어나야 한다.
+세마포어 및 조건 변수 대기열 역시 우선순위 순으로 정렬하며 Unblock마다 
+최고 우선순위 스레드를 선택한다.
+
+2. 에이징 적용: 낮은 우선순위 스레드의 기아상태(Starvation)를 방지하기 위해
+준비 큐에서 대기 중인 스레드의 age 값을 매 틱마다 1씩 증가시키고,
+age가 20에 도달하면 우선순위를 한 단계 상승시킨 뒤 age를 0으로 초기화한다.
+age 값은 큐에 추가될 때마다 0으로 초기화 된다. 이 과정을 반복해 스레드가 
+기본 우선순위(PRI_DEFAULT)까지 회복하고 필요한 시점에 다른 스레드를 선점하도록 한다.
+
+3. Simplified MLFQS(Multi-Level Feedback Queue Scheduler): -mlfqs 플래그 사용 시
+세 단계(Q0, Q1, Q2)의 피드백 큐를 사용하는 단순한 형태의 MLFQS를 구현한다.
+모든 스레드는 Q0에서 시작하고, 각 큐의 타임 슬라이스는 Q0=2틱, Q1=4틱, Q2=8틱이다.
+이 때 Q1 실행 중 Q0에 새 스레드가 추가되면 즉시 새 스레드가 실행된다. 
+주어진 시간 슬라이스를 모두 소모하면 Q0→Q1→Q2 순으로 강등되고, 
+대기 중에는 에이징 정책과 동일하게 매 틱 age를 1씩 증가시켜 age가 20이 되면
+한 단계 상위 큐로 승급시키며 age를 0으로 초기화한다. 이때 상위 큐가 비어 있어야만
+다음 큐의 스레드를 실행하며, 큐의 승급과 강등은 타이머 틱 단위로 수행한다.
+*/
+
+
+
 #include "threads/thread.h"
 #include <debug.h>
 #include <stddef.h>
@@ -16,157 +43,7 @@
 #endif
 
 /* Random value for struct thread's `magic' member.
-   Used to detect stack overflow.  See the big comment at the top
-   of thread.h for details. */
-#define THREAD_MAGIC 0xcd6abf4b
-
-/* List of processes in THREAD_READY state, that is, processes
-   that are ready to run but not actually running. */
-static struct list ready_list;
-
-/* List of all processes.  Processes are added to this list
-   when they are first scheduled and removed when they exit. */
-static struct list all_list;
-
-/* Idle thread. */
-static struct thread *idle_thread;
-
-/* Initial thread, the thread running init.c:main(). */
-static struct thread *initial_thread;
-
-/* Lock used by allocate_tid(). */
-static struct lock tid_lock;
-
-/* Stack frame for kernel_thread(). */
-struct kernel_thread_frame
-{
-    void *eip;             /* Return address. */
-    thread_func *function; /* Function to call. */
-    void *aux;             /* Auxiliary data for function. */
-};
-
-/* Statistics. */
-static long long idle_ticks;   /* # of timer ticks spent idle. */
-static long long kernel_ticks; /* # of timer ticks in kernel threads. */
-static long long user_ticks;   /* # of timer ticks in user programs. */
-
-/* Scheduling. */
-#define TIME_SLICE 4          /* # of timer ticks to give each thread. */
-static unsigned thread_ticks; /* # of timer ticks since last yield. */
-
-/* If false (default), use round-robin scheduler.
-   If true, use multi-level feedback queue scheduler.
-   Controlled by kernel command-line option "-o mlfqs". */
-bool thread_mlfqs;
-
-static void kernel_thread (thread_func *, void *aux);
-
-static void idle (void *aux UNUSED);
-static struct thread *running_thread (void);
-static struct thread *next_thread_to_run (void);
-static void init_thread (struct thread *, const char *name, int priority);
-static bool is_thread (struct thread *) UNUSED;
-static void *alloc_frame (struct thread *, size_t size);
-static void schedule (void);
-void thread_schedule_tail (struct thread *prev);
-static tid_t allocate_tid (void);
-
-/* Initializes the threading system by transforming the code
-   that's currently running into a thread.  This can't work in
-   general and it is possible in this case only because loader.S
-   was careful to put the bottom of the stack at a page boundary.
-
-   Also initializes the run queue and the tid lock.
-
-   After calling this function, be sure to initialize the page
-   allocator before trying to create any threads with
-   thread_create().
-
-   It is not safe to call thread_current() until this function
-   finishes. */
-void
-thread_init (void)
-{
-    ASSERT (intr_get_level () == INTR_OFF);
-
-    lock_init (&tid_lock);
-    list_init (&ready_list);
-    list_init (&all_list);
-
-    /* Set up a thread structure for the running thread. */
-    initial_thread = running_thread ();
-    init_thread (initial_thread, "main", PRI_DEFAULT);
-    initial_thread->status = THREAD_RUNNING;
-    initial_thread->tid = allocate_tid ();
-}
-
-/* Starts preemptive thread scheduling by enabling interrupts.
-   Also creates the idle thread. */
-void
-thread_start (void)
-{
-    /* Create the idle thread. */
-    struct semaphore idle_started;
-    sema_init (&idle_started, 0);
-    thread_create ("idle", PRI_MIN, idle, &idle_started);
-
-    /* Start preemptive thread scheduling. */
-    intr_enable ();
-
-    /* Wait for the idle thread to initialize idle_thread. */
-    sema_down (&idle_started);
-}
-
-/* Called by the timer interrupt handler at each timer tick.
-   Thus, this function runs in an external interrupt context. */
-void
-thread_tick (void)
-{
-    struct thread *t = thread_current ();
-
-    /* Update statistics. */
-    if (t == idle_thread)
-        idle_ticks++;
-#ifdef USERPROG
-    else if (t->pagedir != NULL)
-        user_ticks++;
-#endif
-    else
-        kernel_ticks++;
-
-    /* Enforce preemption. */
-    if (++thread_ticks >= TIME_SLICE)
-        intr_yield_on_return ();
-}
-
-/* Prints thread statistics. */
-void
-thread_print_stats (void)
-{
-    printf ("Thread: %lld idle ticks, %lld kernel ticks, %lld user ticks\n",
-            idle_ticks, kernel_ticks, user_ticks);
-}
-
-/* Creates a new kernel thread named NAME with the given initial
-   PRIORITY, which executes FUNCTION passing AUX as the argument,
-   and adds it to the ready queue.  Returns the thread identifier
-   for the new thread, or TID_ERROR if creation fails.
-
-   If thread_start() has been called, then the new thread may be
-   scheduled before thread_create() returns.  It could even exit
-   before thread_create() returns.  Contrariwise, the original
-   thread may run for any amount of time before the new thread is
-   scheduled.  Use a semaphore or some other form of
-   synchronization if you need to ensure ordering.
-
-   The code provided sets the new thread's `priority' member to
-   PRIORITY, but no actual priority scheduling is implemented.
-   Priority scheduling is the goal of Problem 1-3. */
-tid_t
-thread_create (const char *name, int priority,
-               thread_func *function, void *aux)
-{
-    struct thread *t;
+   Used to detect stack overflow.  See the big 언
     struct kernel_thread_frame *kf;
     struct switch_entry_frame *ef;
     struct switch_threads_frame *sf;
