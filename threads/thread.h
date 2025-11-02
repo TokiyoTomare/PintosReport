@@ -90,6 +90,9 @@ struct thread
     int priority;              /* Priority. */
     struct list_elem allelem;  /* List element for all threads list. */
 
+
+    //2번문제 age를 추가한다
+    int age
     /* Shared between thread.c and synch.c. */
     struct list_elem elem; /* List element. */
 
