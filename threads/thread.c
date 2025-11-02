@@ -484,6 +484,44 @@ idle (void *idle_started_ UNUSED)
         }
 }
 
+
+/*thread_tick에서 호출하는 에이징 함수!! */
+static void
+agingtoThread (void){
+    struct list_elem *e = list_begin (&ready_list);
+   
+    while (e != list_end (&ready_list)){
+       // 리스트의 끝까지 루프를 돈다(list_end에 도달할때까지)
+        struct thread *t = list_entry (e, struct thread, elem);
+       // 검사하다가 age가 20을 넘는 스레드라서 재정렬을 해버리면
+       // 꼬여버리니까 다음에 검사해야 할 걸 미리 저장해둔다
+        struct list_elem *next_e = list_next(e); 
+       // 모든 스레드에게 age++ 해준다.
+        t->age++; 
+       // age가 20이 넘는지 검사한다
+        if (t->age >= 20 && t->priority < PRI_MAX){
+           // (스레드t의age 값이 20살 이상이고&&우선순위의 최대치가 아니라면)
+           // 우선순위가 최대면 어차피 맨 앞에 있을 것... 
+            t->priority++; // 우선순위 1 상승시키고
+            t->age = 0;    // 0으로 리셋
+            
+            // 이 경우 이제 우선순위가 바뀌었으니 리스트를 재정렬해줘야 한다.
+            list_remove (&t->elem);// 리스트에서 뺐다가 
+            list_insert_ordered (&ready_list, &t->elem, comparePriority, NULL);
+           // 다시 넣는다
+        }// 반복문종료...
+        
+        // 이러면 리스트순서가바뀌엇을수도있고안바뀌었을수도 있다
+       //하지만 어차피 다음에 검사해야 할 스레드는 앞에서 미리 정해놨기 때문에
+       // 순서가 바뀌든 말든 문제 없이 넘어갈 수 있다.
+        e = next_e; 
+    }
+}
+
+
+
+
+
 /* Function used as the basis for a kernel thread. */
 static void
 kernel_thread (thread_func *function, void *aux)
@@ -532,7 +570,7 @@ init_thread (struct thread *t, const char *name, int priority)
     t->priority = priority;
     t->magic = THREAD_MAGIC;
    //다른 변수들 초기화 할 때 같이 0으로 초기화해준다 
-    t->age = 0
+    t->age = 0;
     list_push_back (&all_list, &t->allelem);
 }
 
