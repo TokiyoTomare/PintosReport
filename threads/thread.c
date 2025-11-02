@@ -122,7 +122,7 @@ thread_unblock (struct thread *t)
 
     old_level = intr_disable ();
     ASSERT (t->status == THREAD_BLOCKED);
-    list_push_back (&ready_list, &t->elem);
+    list_insert_ordered (&ready_list, &t->elem, comparePriority, NULL);
     t->status = THREAD_READY;
     intr_set_level (old_level);
 }
@@ -192,8 +192,9 @@ thread_yield (void)
     ASSERT (!intr_context ());
 
     old_level = intr_disable ();
+   //ready_list에 우선순위대로 삽입한다.list_insert_ordered()
     if (cur != idle_thread)
-        list_push_back (&ready_list, &cur->elem);
+        list_insert_ordered (&ready_list, &cur->elem, comparePriority, NULL);
     cur->status = THREAD_READY;
     schedule ();
     intr_set_level (old_level);
@@ -215,6 +216,20 @@ thread_foreach (thread_action_func *func, void *aux)
             func (t, aux);
         }
 }
+
+/*1번 우선순위 스케줄링 부분*/
+//comparePriority는 우선순위를 비교한다.. 우선순위가높은애를반환하는것임
+bool
+comparePriority (const struct list_elem *a,
+                  const struct list_elem *b,
+                  void *aux UNUSED)
+{
+    struct thread *thread_a = list_entry (a, struct thread, elem);
+    struct thread *thread_b = list_entry (b, struct thread, elem);
+
+    return thread_a->priority > thread_b->priority;
+}
+
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
