@@ -138,4 +138,12 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
+/*1번 우선순위 스케줄링 부분에서 추가함
+comparePriority로 우선순위를 비교한다. synch.c와 thread.c에서 사용되기 때문에 thread.h에 선언해둔다...
+
+*/
+bool comparePriority (const struct list_elem *a,
+                       const struct list_elem *b,
+                       void *aux UNUSED);
+
 #endif /* threads/thread.h */
