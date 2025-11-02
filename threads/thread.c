@@ -43,7 +43,162 @@ age 값은 큐에 추가될 때마다 0으로 초기화 된다. 이 과정을 �
 #endif
 
 /* Random value for struct thread's `magic' member.
-   Used to detect stack overflow.  See the big 언
+   Used to detect stack overflow.  See the big comment at the top
+   of thread.h for details. */
+#define THREAD_MAGIC 0xcd6abf4b
+
+/* List of processes in THREAD_READY state, that is, processes
+   that are ready to run but not actually running. */
+static struct list ready_list;
+
+/* List of all processes.  Processes are added to this list
+   when they are first scheduled and removed when they exit. */
+static struct list all_list;
+
+/* List of process in sleep */
+static struct list sleep_list;
+static int64_t next_tick_to_wakeup = INT64_MAX;
+
+/* Idle thread. */
+static struct thread *idle_thread;
+
+/* Initial thread, the thread running init.c:main(). */
+static struct thread *initial_thread;
+
+/* Lock used by allocate_tid(). */
+static struct lock tid_lock;
+
+/* Stack frame for kernel_thread(). */
+struct kernel_thread_frame
+{
+    void *eip;             /* Return address. */
+    thread_func *function; /* Function to call. */
+    void *aux;             /* Auxiliary data for function. */
+};
+
+/* Statistics. */
+static long long idle_ticks;   /* # of timer ticks spent idle. */
+static long long kernel_ticks; /* # of timer ticks in kernel threads. */
+static long long user_ticks;   /* # of timer ticks in user programs. */
+
+/* Scheduling. */
+#define TIME_SLICE 4          /* # of timer ticks to give each thread. */
+static unsigned thread_ticks; /* # of timer ticks since last yield. */
+
+/* If false (default), use round-robin scheduler.
+   If true, use multi-level feedback queue scheduler.
+   Controlled by kernel command-line option "-o mlfqs". */
+bool thread_mlfqs;
+
+static void kernel_thread (thread_func *, void *aux);
+
+static void idle (void *aux UNUSED);
+static struct thread *running_thread (void);
+static struct thread *next_thread_to_run (void);
+static void init_thread (struct thread *, const char *name, int priority);
+static bool is_thread (struct thread *) UNUSED;
+static void *alloc_frame (struct thread *, size_t size);
+static void schedule (void);
+void thread_schedule_tail (struct thread *prev);
+static tid_t allocate_tid (void);
+
+/* Initializes the threading system by transforming the code
+   that's currently running into a thread.  This can't work in
+   general and it is possible in this case only because loader.S
+   was careful to put the bottom of the stack at a page boundary.
+
+   Also initializes the run queue and the tid lock.
+
+   After calling this function, be sure to initialize the page
+   allocator before trying to create any threads with
+   thread_create().
+
+   It is not safe to call thread_current() until this function
+   finishes. */
+void
+thread_init (void)
+{
+    ASSERT (intr_get_level () == INTR_OFF);
+
+    lock_init (&tid_lock);
+    list_init (&ready_list);
+    list_init (&all_list);
+    list_init (&sleep_list);
+
+    /* Set up a thread structure for the running thread. */
+    initial_thread = running_thread ();
+    init_thread (initial_thread, "main", PRI_DEFAULT);
+    initial_thread->status = THREAD_RUNNING;
+    initial_thread->tid = allocate_tid ();
+}
+
+/* Starts preemptive thread scheduling by enabling interrupts.
+   Also creates the idle thread. */
+void
+thread_start (void)
+{
+    /* Create the idle thread. */
+    struct semaphore idle_started;
+    sema_init (&idle_started, 0);
+    thread_create ("idle", PRI_MIN, idle, &idle_started);
+
+    /* Start preemptive thread scheduling. */
+    intr_enable ();
+
+    /* Wait for the idle thread to initialize idle_thread. */
+    sema_down (&idle_started);
+}
+
+/* Called by the timer interrupt handler at each timer tick.
+   Thus, this function runs in an external interrupt context. */
+void
+thread_tick (void)
+{
+    struct thread *t = thread_current ();
+
+    /* Update statistics. */
+    if (t == idle_thread)
+        idle_ticks++;
+#ifdef USERPROG
+    else if (t->pagedir != NULL)
+        user_ticks++;
+#endif
+    else
+        kernel_ticks++;
+
+    /* Enforce preemption. */
+    if (++thread_ticks >= TIME_SLICE)
+        intr_yield_on_return ();
+}
+
+/* Prints thread statistics. */
+void
+thread_print_stats (void)
+{
+    printf ("Thread: %lld idle ticks, %lld kernel ticks, %lld user ticks\n",
+            idle_ticks, kernel_ticks, user_ticks);
+}
+
+/* Creates a new kernel thread named NAME with the given initial
+   PRIORITY, which executes FUNCTION passing AUX as the argument,
+   and adds it to the ready queue.  Returns the thread identifier
+   for the new thread, or TID_ERROR if creation fails.
+
+   If thread_start() has been called, then the new thread may be
+   scheduled before thread_create() returns.  It could even exit
+   before thread_create() returns.  Contrariwise, the original
+   thread may run for any amount of time before the new thread is
+   scheduled.  Use a semaphore or some other form of
+   synchronization if you need to ensure ordering.
+
+   The code provided sets the new thread's `priority' member to
+   PRIORITY, but no actual priority scheduling is implemented.
+   Priority scheduling is the goal of Problem 1-3. */
+tid_t
+thread_create (const char *name, int priority,
+               thread_func *function, void *aux)
+{
+    struct thread *t;
     struct kernel_thread_frame *kf;
     struct switch_entry_frame *ef;
     struct switch_threads_frame *sf;
