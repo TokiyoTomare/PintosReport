@@ -224,7 +224,7 @@ thread_foreach (thread_action_func *func, void *aux)
 }
 
 /*1번 우선순위 스케줄링 부분*/
-//comparePriority는 우선순위를 비교한다.. 우선순위가높은애를반환하는것임
+//comparePriority는 우선순위를 비교한다.. 
 bool
 comparePriority (const struct list_elem *a,
                   const struct list_elem *b,
