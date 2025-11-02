@@ -122,6 +122,8 @@ thread_unblock (struct thread *t)
 
     old_level = intr_disable ();
     ASSERT (t->status == THREAD_BLOCKED);
+    // age를 0으로 만들기
+    t->age = 0;
     list_insert_ordered (&ready_list, &t->elem, comparePriority, NULL);
    //스레드 t를 삽입을했음 근데 새로 깨어난 스레드의 우선순위가 더 높다면
    // 현재스레드는 CPU를 양보해야한다... 바로 thread_yield()호출
@@ -199,8 +201,10 @@ thread_yield (void)
 
     old_level = intr_disable ();
    //ready_list에 우선순위대로 삽입한다.list_insert_ordered()
-    if (cur != idle_thread)
+    if (cur != idle_thread){
+        cur->age = 0; //0으로 바꿔주기만 하면 된다.
         list_insert_ordered (&ready_list, &cur->elem, comparePriority, NULL);
+    }
     cur->status = THREAD_READY;
     schedule ();
     intr_set_level (old_level);
