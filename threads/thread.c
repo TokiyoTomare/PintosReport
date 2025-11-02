@@ -372,6 +372,8 @@ init_thread (struct thread *t, const char *name, int priority)
     t->stack = (uint8_t *)t + PGSIZE;
     t->priority = priority;
     t->magic = THREAD_MAGIC;
+   //다른 변수들 초기화 할 때 같이 0으로 초기화해준다 
+    t->age = 0
     list_push_back (&all_list, &t->allelem);
 }
 
