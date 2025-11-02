@@ -242,6 +242,11 @@ void
 thread_set_priority (int new_priority)
 {
     thread_current ()->priority = new_priority;
+   if (!list_empty (&ready_list) &&
+    (new_priority < list_entry (list_begin (&ready_list), struct thread, elem)->priority)){
+    thread_yield ();
+}
+   
 }
 
 /* Returns the current thread's priority. */
